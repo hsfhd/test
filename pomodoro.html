@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>番茄钟</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #0f0f14;
+    color: #e0e0e0;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 32px;
+  }
+
+  .timer-wrapper {
+    position: relative;
+    width: 320px;
+    height: 320px;
+  }
+
+  .progress-ring {
+    transform: rotate(-90deg);
+    width: 320px;
+    height: 320px;
+  }
+
+  .progress-ring__bg {
+    fill: none;
+    stroke: #1e1e2e;
+    stroke-width: 8;
+  }
+
+  .progress-ring__fill {
+    fill: none;
+    stroke-width: 8;
+    stroke-linecap: round;
+    transition: stroke 0.4s;
+  }
+
+  .progress-ring__fill.focus { stroke: #e85d5d; }
+  .progress-ring__fill.short-break { stroke: #5db8e8; }
+  .progress-ring__fill.long-break { stroke: #6be86b; }
+
+  .timer-display {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+  }
+
+  .time {
+    font-size: 72px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 4px;
+    line-height: 1;
+  }
+
+  .session-label {
+    font-size: 16px;
+    font-weight: 500;
+    margin-top: 8px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+
+  .controls {
+    display: flex;
+    gap: 16px;
+  }
+
+  .btn {
+    padding: 12px 36px;
+    border: none;
+    border-radius: 28px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 1px;
+    transition: transform 0.15s, opacity 0.15s, box-shadow 0.15s;
+  }
+
+  .btn:active { transform: scale(0.96); }
+
+  .btn-start {
+    background: #e85d5d;
+    color: #fff;
+    min-width: 120px;
+    box-shadow: 0 4px 20px rgba(232, 93, 93, 0.35);
+  }
+  .btn-start:hover { box-shadow: 0 6px 28px rgba(232, 93, 93, 0.5); }
+
+  .btn-start.paused {
+    background: #5db8e8;
+    box-shadow: 0 4px 20px rgba(93, 184, 232, 0.35);
+  }
+  .btn-start.paused:hover { box-shadow: 0 6px 28px rgba(93, 184, 232, 0.5); }
+
+  .btn-reset {
+    background: transparent;
+    color: #888;
+    border: 2px solid #333;
+  }
+  .btn-reset:hover {
+    color: #ccc;
+    border-color: #555;
+  }
+
+  .pomodoros {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+
+  .dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #1e1e2e;
+    transition: background 0.3s, transform 0.3s;
+  }
+
+  .dot.done {
+    background: #e85d5d;
+    box-shadow: 0 0 10px rgba(232, 93, 93, 0.5);
+    animation: pop-in 0.35s ease;
+  }
+
+  @keyframes pop-in {
+    0%   { transform: scale(0); }
+    60%  { transform: scale(1.4); }
+    100% { transform: scale(1); }
+  }
+
+  .next-label {
+    font-size: 13px;
+    color: #666;
+    letter-spacing: 1px;
+  }
+
+  .hint {
+    font-size: 12px;
+    color: #444;
+    margin-top: 8px;
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="timer-wrapper">
+    <svg class="progress-ring" viewBox="0 0 320 320">
+      <circle class="progress-ring__bg" cx="160" cy="160" r="148"/>
+      <circle class="progress-ring__fill focus" cx="160" cy="160" r="148"
+              stroke-dasharray="929.9" stroke-dashoffset="0"/>
+    </svg>
+    <div class="timer-display">
+      <div class="time">25:00</div>
+      <div class="session-label">专注</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn-reset" id="resetBtn">重置</button>
+    <button class="btn btn-start" id="startBtn">开始</button>
+  </div>
+
+  <div class="pomodoros" id="dots"></div>
+  <div class="next-label" id="nextLabel"></div>
+  <div class="hint">按空格键 开始/暂停</div>
+</div>
+
+<script>
+  const SETTINGS = {
+    focus: 25 * 60,
+    shortBreak: 5 * 60,
+    longBreak: 15 * 60,
+    longBreakInterval: 4,
+  };
+
+  const SESSION_META = {
+    focus:       { label: '专注',     next: 'shortBreak', color: 'focus' },
+    shortBreak:  { label: '短休息',   next: 'focus',       color: 'short-break' },
+    longBreak:   { label: '长休息',   next: 'focus',       color: 'long-break' },
+  };
+
+  const state = {
+    session: 'focus',
+    secondsLeft: SETTINGS.focus,
+    totalSeconds: SETTINGS.focus,
+    pomodorosDone: 0,
+    running: false,
+    intervalId: null,
+  };
+
+  const $ = (sel) => document.querySelector(sel);
+  const timeEl = $('.time');
+  const sessionLabel = $('.session-label');
+  const startBtn = $('#startBtn');
+  const resetBtn = $('#resetBtn');
+  const dotsEl = $('#dots');
+  const nextLabel = $('#nextLabel');
+  const ringFill = $('.progress-ring__fill');
+  const docTitle = document.title;
+
+  const circumference = 2 * Math.PI * 148; // ~929.9
+
+  function format(sec) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  }
+
+  function updateDisplay() {
+    timeEl.textContent = format(state.secondsLeft);
+    const progress = 1 - (state.secondsLeft / state.totalSeconds);
+    ringFill.setAttribute('stroke-dashoffset', circumference * (1 - progress));
+    document.title = format(state.secondsLeft) + ' - 番茄钟';
+  }
+
+  function updateSessionUI() {
+    const meta = SESSION_META[state.session];
+    sessionLabel.textContent = meta.label;
+    ringFill.className = 'progress-ring__fill ' + meta.color;
+    ringFill.setAttribute('stroke-dashoffset', '0');
+    timeEl.textContent = format(state.totalSeconds);
+    document.title = docTitle;
+  }
+
+  function renderDots() {
+    let html = '';
+    for (let i = 0; i < SETTINGS.longBreakInterval; i++) {
+      html += `<div class="dot${i < state.pomodorosDone % SETTINGS.longBreakInterval ? ' done' : ''}"></div>`;
+    }
+    dotsEl.innerHTML = html;
+
+    const remaining = SETTINGS.longBreakInterval - (state.pomodorosDone % SETTINGS.longBreakInterval);
+    if (remaining === 1) {
+      nextLabel.textContent = '下一次: 长休息 (15 分钟)';
+    } else {
+      nextLabel.textContent = '下一次: 短休息 (5 分钟)';
+    }
+    if (state.pomodorosDone === 0) nextLabel.textContent = '';
+  }
+
+  function playAlarm() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const notes = [880, 1100, 1320];
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + i * 0.2);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.2 + 0.4);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime + i * 0.2);
+        osc.stop(ctx.currentTime + i * 0.2 + 0.4);
+      });
+    } catch (_) { /* audio not available */ }
+  }
+
+  function notify(title, body) {
+    if (Notification.permission === 'granted') {
+      new Notification(title, { body, icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🍅</text></svg>' });
+    }
+  }
+
+  function switchSession() {
+    const meta = SESSION_META[state.session];
+    if (state.session === 'focus') {
+      state.pomodorosDone++;
+    }
+
+    if (meta.next === 'shortBreak' && state.pomodorosDone % SETTINGS.longBreakInterval === 0) {
+      state.session = 'longBreak';
+    } else {
+      state.session = meta.next;
+    }
+
+    state.totalSeconds = SETTINGS[state.session];
+    state.secondsLeft = state.totalSeconds;
+    updateSessionUI();
+    renderDots();
+  }
+
+  function tick() {
+    if (state.secondsLeft <= 0) {
+      stopTimer();
+      playAlarm();
+      const meta = SESSION_META[state.session];
+      notify('番茄钟', `${meta.label} 结束！`);
+      switchSession();
+      startTimer();
+      return;
+    }
+    state.secondsLeft--;
+    updateDisplay();
+  }
+
+  function startTimer() {
+    state.running = true;
+    startBtn.textContent = '暂停';
+    startBtn.classList.add('paused');
+    state.intervalId = setInterval(tick, 1000);
+  }
+
+  function stopTimer() {
+    state.running = false;
+    startBtn.textContent = '开始';
+    startBtn.classList.remove('paused');
+    if (state.intervalId) {
+      clearInterval(state.intervalId);
+      state.intervalId = null;
+    }
+  }
+
+  function toggle() {
+    if (state.running) {
+      stopTimer();
+    } else {
+      startTimer();
+    }
+  }
+
+  function reset() {
+    stopTimer();
+    state.totalSeconds = SETTINGS[state.session];
+    state.secondsLeft = state.totalSeconds;
+    updateDisplay();
+    updateSessionUI();
+  }
+
+  function skip() {
+    stopTimer();
+    switchSession();
+  }
+
+  startBtn.addEventListener('click', toggle);
+  resetBtn.addEventListener('click', reset);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      toggle();
+    }
+  });
+
+  // Request notification permission on first interaction
+  document.addEventListener('click', () => {
+    if (Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, { once: true });
+
+  // Initialize
+  renderDots();
+  updateDisplay();
+</script>
+
+</body>
+</html>
